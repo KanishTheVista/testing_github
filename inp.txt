@@ -1,0 +1,798 @@
+<?php
+/**
+ *  Class for Patient List Chart objects
+ */
+class patient_problem_chart_data_object {
+    public $type = "";
+    public $prob_code = "";
+    public $start_date = "";
+    public $supply_days = "";
+}
+/**
+ * Render Problem or Assement table depending on is_assesment flag
+ */
+function patient_problem_or_assessment_list_form(&$form, &$form_state, $edit_flag = FALSE, $is_assesment = FALSE, $AWV_flag = 0) {
+    global $user;
+    $table_head = '';
+    $form_state['storage']['encounter_id'] = isset($form_state['storage']['encounter']->encounter_id) ? $form_state['storage']['encounter']->encounter_id : NULL;
+    $patient = $form_state['storage']['patient'];
+    $show_audit_btn = $AWV_flag ? FALSE : TRUE;
+    if (!isset($form_state['storage']['edit_flag'])) {
+        $form_state['storage']['edit_flag'] = $edit_flag;
+    }
+    if ($is_assesment) {
+        $table = patient_problem_list_table($patient, $form_state);
+        $form['assessment_plan'] = array(
+            '#prefix' => '<div class="relative_elem"><div class="table_ajaxloader ajaxloader hidden_elem"><div><span></span></div></div>',
+            '#markup' => '<div id="patient_assessment_plan_table_wrapper" class="relative_elem">' . $table[0] . '</div>'
+        );
+        patient_assessment_plan_table($patient, $form_state['storage']['encounter_id'], $form_state);
+        $form_state['storage']['assessment_plan']['care_plan'][0] = isset($form_state['storage']['result'][3]) ? $form_state['storage']['result'][3] : array();
+        $form_state['storage']['assessment_plan']['care_plan'][1] = isset($form_state['storage']['result'][3]) ? $form_state['storage']['result'][4] : array();
+        $form_state['storage']['assessment_flag'] = TRUE;
+        if($form_state['storage']['edit_flag']) {
+            $add_prescription = '<span class="custom_a" data-ajax="true" custom-modal="true" data-ajaxify="/ehr_api/encounter_section_form_open/new_prescription_form" data-modal-title="New Presciption">+Rx</span>';
+            $add_procedure = '<span class="custom_a" data-ajax="true" custom-modal="true" data-ajaxify="/ehr_api/encounter_section_form_open/patient_procedure_order_add" data-modal-title="Add Procedure" data-ajax-data="action_type=' . ADD_PROCEDURE_ORDER . '">+Pcs</span>';
+            $pw_status = db_query('select pw from ehr_lab_emdeon_users where doc_id=:doc_id', array(
+                ':doc_id' => $_SESSION['doctorsPersonId']
+            ))->fetchField();
+            $patient_id = is_object($patient) ? $patient->id : $patient;
+            if (!empty($pw_status)) {
+                $add_lab_order = ($form_state['storage']['edit_flag']) ? '<span class="custom_a" data-ajax="true" custom-modal="true" data-ajaxify="/ehr_api/encounter_section_form_open/patient_lab_order_add" data-modal-title="Add Lab Details">+Lab</span>' : '';
+            } else {
+                $add_lab_order = '<span><a href="javascrpt:void(0)" id="sign_in_emdeon"  style="color:rgb(66, 139, 202);" class="active splitview-dialog"' . splitview_key . '="' . context_modal_dialog . '" ' . splitview_data . '="&' . dialog_form_id . '=emdeon_access&patient_id=' . $patient_id . '&encounter_id=' . $form_state['storage']['encounter_id'] . '" ' . dialog_form_id . '="emdeon_access"   data-toggle="modal"  title="' . 'Add Lab Details' . '" reload_onclose="true"><span class="custom_a">+Lab<span></a></span>';
+            }
+        }
+        $table = '<table id="order_list" cellspacing="2px" style="width:100%;">
+                        <thead>
+                            <tr>
+                                <th class="w10p" style="border-bottom: 1px solid #c9c9c9; border-top: 1px solid #c9c9c9; padding: 2px 0px 2px 10px;">Orders</th>
+                                <th class="w1p" style="border-bottom: 1px solid #c9c9c9; border-top: 1px solid #c9c9c9; padding: 2px 0px 2px 12px;">'. $add_prescription .'</th>
+                                <th class="w1p" style="border-bottom: 1px solid #c9c9c9; border-top: 1px solid #c9c9c9; padding: 2px 0px 2px 12px;">'. $add_lab_order .'</th>
+                                <th class="w1p" style="border-bottom: 1px solid #c9c9c9; border-top: 1px solid #c9c9c9; padding: 2px 0px 2px 12px;">'. $add_procedure .'</th>
+                            </tr>
+                       </thead>
+                  </table>';
+        $form['orders'] = array(
+            '#markup' => '<div id="order_wrapper" class="pbm">' . $table . '</div>'
+        );
+        $data = db_query('SELECT leo.*, CONCAT(p.lname,\', \',p.fname,\' \',p.mi) as provider_name_fix FROM ehr_lab_emdeon_orders leo
+                            JOIN cf_encounter e ON (e.patient_id = SUBSTRING(leo.patient_id, 3))
+                            JOIN cf_person p ON p.id = e.`provider_id`
+                            WHERE e.encounter_id = :enc_id
+                            AND e.patient_id = :pat_id
+                            AND DATE_FORMAT(e.start_date, \'%yyyy-%mm-%dd %H:%i\') <= DATE_FORMAT(leo.`request_date`, \'%yyyy-%mm-%dd %H:%i\')
+                            AND leo.prov_id = p.id'// temp fix untill provider registered to emdeon
+                            // AND CONCAT(lname,\', \',fname,\' \',mi) = leo.`provider_name`'
+                            ,array(
+                            ':enc_id' => $form_state['storage']['encounter_id'],
+                            ':pat_id' => $patient_id
+                        ))->fetchAll();
+        if (!$AWV_flag) {
+            if(!(isset($_GET['template_request']) && $_GET['template_request'])) {
+                if (isset($data[0])) {
+                    $table_head = '<thead>
+                       <tr class="emdeon_lab_orders_table">
+                       <th class="w40p" colspan="2">Lab Orders</div><div class="clear"></div></th>
+                       <th class="w10p">Status</th>
+                       <th class="w10p">Date</th>
+                       <th class="w10p"></th>
+                       <th class="w30p">Source</th>
+                       </tr>
+                       </thead>';
+                } else {
+                    $table_head = '<thead>
+                       <tr class="emdeon_lab_orders_table">
+                       <th class="pat-th sort_html_table" width="35%" style="border-bottom: 1px solid #e5e6e9;">Lab Orders</div><div class="clear"></div></th>
+                      </thead>';
+                }
+            } else {
+                $table_head = NULL;
+            }
+            if(!empty($form_state['storage']['section_data_counts']->hasCurLabOrder)) {
+                $form['lab_order_list'] = array(
+                    '#prefix' => '<div style="margin: 0 20px 0; background-color: white; z-index: 1; border: 1px solid; border-color: #e5e6e9 #dfe0e4 #d0d1d5; border-bottom: none;">',
+                    '#markup' => '<div id="patient_lab_orders_wrapper_wrapper">' . emdeon_patient_lab_orders($patient, $form_state['storage']['encounter_id'], $table_head, $data) . '</div>',
+                    '#suffix' => '</div>'
+                );
+            }
+        }
+        $form_state['storage']['assessment_plan']['care_plan'][0] = isset($form_state['storage']['result'][3]) ? $form_state['storage']['result'][3] : array();
+        $form_state['storage']['assessment_plan']['care_plan'][1] = isset($form_state['storage']['result'][3]) ? $form_state['storage']['result'][4] : array();
+        $form_state['storage']['assessment_flag'] = TRUE;
+        $form_state['storage']['assessment_plan']['procedure'][0] = $form_state['storage']['result'][5];
+        $form_state['storage']['assessment_plan']['procedure'][1] = $form_state['storage']['result'][6];
+        if(!empty($form_state['storage']['section_data_counts']->hasCurProcOrder)) {
+            $form['problem_list_procedure'] = array(
+                '#prefix' => '<div style="margin: 0 20px; background-color: white; z-index: 1; border: 1px solid; border-color: #e5e6e9 #dfe0e4 #d0d1d5; border-bottom: none;">',
+                '#markup' => '<div id="patient_problem_procedure_wrapper">' . ehr_patient_procedure_table($form_state['storage']['assessment_plan']['procedure'], $form_state['storage']['encounter_id'], $form_state['storage']['edit_flag'], TRUE) . '</div>',
+                '#suffix' => '</div>'
+            );
+        }
+        $form_state['storage']['assessment_plan']['prescription'] = !empty($form_state['storage']['result'][1]) ? $form_state['storage']['result'][1] : array();
+        $form_state['storage']['assessment_plan']['prescription_indication'] = !empty($form_state['storage']['result'][2]) ? $form_state['storage']['result'][2] : array();
+        if(!empty($form_state['storage']['section_data_counts']->hasCurMedOrder)) {
+            $form['prescription'] = array(
+                '#prefix' => '<div style="margin: 0 20px 10px 20px; border-bottom: 1px solid #eee; background-color: white; z-index: 1; border: 1px solid; border-color: #e5e6e9 #dfe0e4 #d0d1d5;">',
+                '#markup' => '<div id="prescription_wrapper">' . ehr_patient_medication_table($form_state, $patient_id, TRUE) . '</div>',
+                '#suffix' => '</div></div>'
+            );
+        }
+        $form['extra_space'] = array(
+            '#markup' => '<div id="order_wrapper_extra_space"></div>'
+        );
+    } else {
+        $form_state['storage']['edit_flag'] = $edit_flag;
+        $form['problem_list'] = array(
+            '#prefix' => '<div id="problem_list" class="enc_table_wrapper"><div id="patient_problem_list_wrapper"></div>',
+            '#suffix' => '</div>'
+        );
+        $table = patient_problem_list_table($patient, $form_state);
+        $form['problem_list']['table'] = array(
+            '#markup' => '<div id="patient_problem_list_table_wrapper" class="relative_elem"><div class="table_ajaxloader ajaxloader enc-loader hidden_elem" ><div><span></span></div></div><div id="problem_list_inline_tooltip"></div>' . $table[0] . '</div>'
+        );
+    }
+    return $form;
+}
+/**
+ * Render Problem List Table
+ */
+function patient_problem_list_table($patient, &$form_state) {
+    if (is_object($patient)) {
+        $patient_id = $patient->id;
+    } else {
+        $patient_id = $patient;
+    }
+    $encounter_id = isset($form_state['storage']['encounter_id']) ? $form_state['storage']['encounter_id'] : NULL;
+    $flag = isset($form_state['storage']['status_flag']) ? $form_state['storage']['status_flag'] : 0;
+    $edit_flag = isset($form_state['storage']['edit_flag']) ? $form_state['storage']['edit_flag'] : 0;
+    $add_icon = $edit_flag ? '<span class="fa fa-plus-circle " data-ajax="true" custom-modal="true" data-ajaxify="/ehr_api/encounter_section_form_open/problem_list_add_new_form" data-modal-title="Add Problem"></span>' : '';
+    $AWV_flag = ((isset($_POST['eval_type']) && $_POST['eval_type'] == EVAL_TYPE_AWV) || (isset($_GET['awv_supp_data']) && $_GET['awv_supp_data'])) ? 1 : 0;
+    $show_history = (!empty($_POST['show_history']) && $_POST['show_history'] == '1') ? TRUE : FALSE;
+    $history_shown = (!empty($_POST['history_shown']) && $_POST['history_shown'] == '1') ? '' : ' hide';
+    $current_data = !empty($form_state['storage']['section_data_counts']->hasCurProb) || !empty($_POST['current_data']);
+    $old_data = !empty($form_state['storage']['section_data_counts']->prob_hx_count) || $show_history;
+    if ($current_data || $show_history || empty($encounter_id)) {
+        $query = 'call get_ehr_problem_list( :patient_id, :providerID, :viewerID , :flag, :encounter_id)';
+        $params = array(
+            ':patient_id' => $patient_id,
+            ':providerID' => $_SESSION['doctorsPersonId'],
+            ':viewerID' => $_SESSION['personId'],
+            ':flag' => NULL,
+            ':encounter_id' => ($show_history ? NULL : $encounter_id)
+        );
+        $result = sp_query_with_parameters($query, $params);
+    }
+    $result_set = !empty($result[0]) ? $result[0] : array();
+//     patient_problem_list_chart_data($result_set, $form_state);
+    $table = $table_data = '';
+    $code = NULL;
+    $problem_list_multiple_select_data = $problems_table_data = array();
+    $form_state['storage']['show_audit_btn'] = !empty($form_state['storage']['show_audit_btn']) ? $form_state['storage']['show_audit_btn'] : FALSE;
+    $buttons = $edit_flag ? ehr_section_buttons(problem_list_section_id, $form_state['storage']['show_audit_btn'], $edit_flag, 'patient_problem_list_table', 'problem_list_section', FALSE, ($old_data || isset($_POST['history_shown']))) : '';
+    $edit_flag = !$show_history && $edit_flag;
+    if (!empty($form_state['storage']['encounter_id']) && !empty($result_set)) {
+        $current_data = order_encounter_data($result_set, $form_state['storage']['encounter_id'], $current_data, 'unique_id', FALSE);
+    }
+    $structure_array = A_P_element_properties();
+    if ($edit_flag) {
+        foreach($result_set as $index => $problems) {
+            $obs_id = $problems->obs_id;
+            $problem_name = !empty($problems->problem_name) ? $problems->problem_name : '';
+            $assessment_flag = isset($problems->assessment_flag) ? $problems->assessment_flag : NULL;
+            $code = $problems->prob_code;
+            if (!$problems->deleted && !(isset($result_set[$index-1]->prob_code) && $result_set[$index-1]->prob_code == $code)) {
+                $object = new stdClass();
+                $object->prob_obs_id = $obs_id;
+                $object->prob_description = $problem_name;
+                $object->is_assessment = $assessment_flag;
+                $object->key = $problems->problem_code_type . '|' . $code;
+                $problem_list_multiple_select_data[] = $object;
+                unset($object);
+            }
+        }
+    }
+    foreach ($result_set as $index => $problems) {
+        $generic_id = isset($problems->generic_code_level) ? $problems->generic_code_level : '';
+        if (!isset($problems_table_data[$generic_id])) {
+            $problems_table_data[$generic_id] = array();
+        }
+        $problems_table_data[$generic_id][] = $problems;
+    }
+    uasort($problems_table_data, function ($item1, $item2) {
+        if ($item2[0]->start_date == $item1[0]->start_date) {
+            return 0;
+        }
+        return new DateTime($item2[0]->start_date) < new DateTime($item1[0]->start_date) ? -1 : 1;
+    });
+    /* ========================== Careplan Result ==============================*/
+    $careplan_result = array();
+    $old_careplan_data = !empty($form_state['storage']['section_data_counts']->careInst_hx_count) || $show_history;
+    $on_behalf_id = (isset($_SESSION['doctorsPersonId']) ? $_SESSION['doctorsPersonId'] : $_SESSION['personId']);
+    if ($current_data || $show_history || empty($encounter_id)) {
+        $query = 'call get_ehr_plan_care_instruction_list(:patient_id, :on_behalf_id, :person_id , :isorder, :encounter_id)';
+        $params = array(
+            ':patient_id' => $patient_id,
+            ':on_behalf_id' => $on_behalf_id,
+            ':person_id' => $_SESSION['personId'],
+            ':isorder' => NULL,
+            ':encounter_id' => ($show_history ? NULL : $encounter_id)
+        );
+        $careplan_result = sp_query_with_parameters($query, $params);
+    }
+    /* ============================= end ====================================== */
+    foreach ($problems_table_data as $group_index => $group_data) {
+        $generic_show_code = str_replace(array('.','|'), array('_','-'), $group_index);
+        foreach ($group_data as $index => $problems) {
+            $obs_id = $problems->obs_id;
+            $problem_name = !empty($problems->problem_name) ? $problems->problem_name : '';
+            $assessment_flag = isset($problems->assessment_flag) ? $problems->assessment_flag : NULL;
+            $code = $problems->prob_code;
+            $edit_attr = $edit_attr_text = $edit_attr_date = $problem_status_edit = $start_date_input = $end_date_input = $start_date_attr = $end_date_attr = $problem_end_date = $note_edit = $row_deleted_class = $delete_button = $careplan_td = '';
+            $generic_group_class = $index > 0 ? ' hidden_row_' . $generic_show_code . ' notShown' : '';
+            $generic_description = !empty($problems->generic_description) ? titleCase(strtolower($problems->generic_description)) : '';
+            $generic_group_allLink = (empty($generic_group_class) && $index == 0 && !empty($group_data[$index+1])) ? '<span class="pat-td pat-group-td multiple"> | </span><span class="show_all_row custom_a" code="' . $generic_show_code . '" change_background="1" next_elem="1">All</span>' : '';
+            if(!(isset($form_state['storage']['template_request']) && $form_state['storage']['template_request'])) {
+                $generic_description_elem = empty($generic_group_class) ? '<tr class="generic_tr"><td></td><td class="generic_td w39p"><span>' . $generic_description . '</span>' . $generic_group_allLink . '</td><td colspan="4"></td></tr>' : '';
+            } else {
+                $generic_description_elem = empty($generic_group_class) ? '<tr class="generic_tr"><td></td><td class="generic_td"><span>' . $generic_description . '</span>' . $generic_group_allLink . '</td><td colspan="4"></td></tr>' : '';
+            }
+            $code = $problems->prob_code;
+            $status = isset($problems->problem_status) ? $problems->problem_status : '';
+            $start_date_temp = isset($problems->start_date) ? date('M d, Y H:i:s', strtotime($problems->start_date)) : 'NOW';
+            $start_datetime_state = isset($problems->start_datetime_state) ? $problems->start_datetime_state : NO_DATE_STATE;
+            $start_date_temp = new DateTime($start_date_temp, new DateTimeZone(cf_db_timezone_get()));
+            $start_date_temp->setTimezone(new DateTimeZone(date_default_timezone()));
+            $end_datetime_state = isset($problems->end_datetime_state) ? $problems->end_datetime_state : NO_DATE_STATE;
+            $end_date_temp = isset($problems->end_date) ? date('M d, Y H:i:s', strtotime($problems->end_date)) : 'NOW';
+            $end_date_temp = new DateTime($end_date_temp, new DateTimeZone(cf_db_timezone_get()));
+            $end_date_temp->setTimezone(new DateTimeZone(date_default_timezone()));
+            $end_date = $end_date_temp->format('Y-m-d H:i');
+            $note = isset($problems->note) ? $problems->note : '';
+            $instruction = isset($problems->instruction) ? $problems->instruction : '';
+            $note_temp = !empty($note) ? htmlentities($note) : '--';
+            $instruction_temp = !empty($instruction) ? htmlentities($instruction) : '--';
+            $note = htmlentities($note);
+            $instruction = htmlentities($instruction);
+            if ($problems->deleted) {
+                $row_deleted_class = ' encounter_deleted_row';
+            }
+            if ($edit_flag && !$problems->deleted) {
+                $add_goal = '<span class="fa-stack" data-ajax="true" custom-modal="true" data-ajaxify="/ehr_api/encounter_section_form_open/care_plan_add_new_form" data-modal-title="Add Related Goals" data-ajax-data="action_type=' . ADD_CARE_PLAN_ORDER .'&obs_id='. $obs_id .'&indication='. $problem_name .'&nbsp;(' . $code . ')" style="cursor: pointer; padding-top: 3px;" title="Add Related Goals">
+                                <i class="fa fa-bullseye custom_a fa-stack-2x" style="font-size: 1.25em;"></i>
+                                <i class="fa fa-long-arrow-left fa-stack-1x" style="color: black; transform: rotate(-30deg); font-size: 12px; font-weight: lighter; padding-left: 10px; margin-top: -4px;"></i>
+                             </span>';
+                $edit_attr = ' integrated_inline_edit="true" ';
+                $edit_attr_text = ' integrated_inline_edit_text="true" ';
+                $edit_attr_date = ' integrated_inline_edit_date="true"';
+                $problem_status_edit = '<select ' . $edit_attr . ' style="width: 100%; display: none;" name="problem_status" class="input-sm form-select" title="Problem Status">' . problem_inline_status_options($status) . '</select>';
+                $end_date_format = $end_date_temp->format('d-m-Y H:i');
+                $start_date_format = $start_date_temp->format('d-m-Y H:i');
+                $start_date_input = '<input type="hidden" size= 10 value ="' .  (isset($problems->start_date) ? $start_date_format : '') . '" old_val ="' .  (isset($problems->start_date) ? $start_date_format : '')  . '" name="problem_start_date" ' . $edit_attr . '></input><input type="hidden" size= 10 name="problem_start_datetime_state" old_val="' . $start_datetime_state . '" value="' . $start_datetime_state . '"></input>';
+                $end_date_input = '<input type="hidden" size= 10 value ="' . (isset($problems->end_date) ? $end_date_format : '') . '" old_val ="' . (isset($problems->end_date) ?$end_date_format : '') . '" name="problem_end_date" ' . $edit_attr . '></input><input type="hidden" size= 10 name="problem_end_datetime_state" old_val="' . $end_datetime_state . '" value="' . $end_datetime_state . '"></input>';
+                $start_date_attr = 'data-datetime-value="' . $start_date_format . '" data-datetime-state="' . $start_datetime_state . '" ';
+                $end_date_attr = 'data-datetime-value="' . $end_date_format . '" data-datetime-state="' . $end_datetime_state . '" ';
+                $note_edit = '<textarea size= 10  name="problem_note" ' . $edit_attr . ' style="display:none;" class="form-control input-sm" maxlength="100">' . $note . '</textarea >';
+                $instruction_edit = '<textarea size= 10  name="instruction" ' . $edit_attr . ' style="display:none;" class="form-control input-sm" maxlength="100">' . $instruction . '</textarea >';
+                $ajax_data_delete = 'obs_id=' . $obs_id . '&tableCategory=problem_list_section&status_flag=' . $flag;
+                $delete_button = '<a href="javascript:void(0)" has-prompt="true" data-prompt-content="Are you sure you want to delete?" has-cancel-button="true" data-ajax_data="' . $ajax_data_delete . '" ehr_delete_row="true" prompt-ok-id="ehr_delete_row_problem_|' . $obs_id . '" prompt-ok-text="Yes" prompt-cancel-text="No" prompt-title="Confirm" title="&nbsp;Delete"><span class="fa fa-trash-o"></span></a>';
+            }
+            $start_extractor_arg = ($edit_flag ? '<span class="empty_placeholder">+ Start Date</span>' : '');
+            $problem_start_date = '<span ' . $start_date_attr . $edit_attr_date . ' >' . datetime_extractor($start_date_temp->format('Y-m-d H:i'), $start_datetime_state, $start_extractor_arg) . '</span><span>' . $start_date_input . '</span>';
+            $service_date = !empty($problems->service_date) ? date('M d, Y', strtotime($problems->service_date)) : '';
+            if (!empty($problems->status_id) && ($problems->status_id == PROBLEM_STATUS_RESOLVED || $problems->status_id == PROBLEM_STATUS_INACTIVE)) {
+                $end_extractor_arg = ($edit_flag ? '<span class="empty_placeholder">+ End Date</span>' : '');
+                $problem_end_date = (!empty($problems->start_date) && $edit_flag ? '&nbsp;-&nbsp;' : '') . '<span ' . $end_date_attr . $edit_attr_date . ' >' . datetime_extractor($end_date, $end_datetime_state, $end_extractor_arg) . '</span><span>' . $end_date_input . '</span>';
+            }
+            $source_provider = trim($problems->source_provider);
+            $source_provider = !empty($source_provider) ? (!empty($problems->start_date) || !empty($problems->end_date) || $edit_flag ? ', &nbsp;' : '') . $problems->source_provider : '';
+            /* Building Serialize JSON Data for Copy Operation. This Whole data will be POST on ehr_api */
+            $json_data = array();
+            $form_category = 'problem_list_section';
+            $json_data['form_category'] = $form_category;
+            $json_data['encounter_id'] = isset($form_state['storage']['encounter_id']) ? $form_state['storage']['encounter_id'] : NULL;
+            $json_data['patient_id'] = $patient_id;
+            $json_data['patient_cozeva_id'] = !empty($patient->cozeva_id) ? $patient->cozeva_id : '';
+            $json_data['icd10_code'] = $patient_id;
+            $json_data['problem_name_code_type'] = isset($problems->problem_code_type) ? $problems->problem_code_type : 'ICD10';
+            $json_data['ehr_problem_name'] = !empty($problems->problem_name) ? $problems->problem_name : '';
+            $json_data['ehr_problem_name-value'] = isset($problems->prob_code) ? $problems->prob_code : '';
+            $json_data['problem_list_status'] = isset($problems->status_id) ? $problems->status_id : '';
+            $json_data['onset'] = isset($problems->start_date) ? $problems->start_date : null;
+            $json_data['onset_datetime_state'] = isset($problems->start_datetime_state) ? $problems->start_datetime_state : DEFAULT_DATETIME_STATE;
+            $json_data['end_date'] = isset($problems->end_date) ? $problems->end_date : null ;
+            $json_data['end_datetime_state'] = $end_datetime_state = isset($problems->end_datetime_state) ? $problems->end_datetime_state : DEFAULT_DATETIME_STATE;
+            $json_data['notes'] =  isset($problems->note) ? $problems->note : '';
+            $json_data['status_flag'] = 0;
+            $json_data['eval_type'] = 1;
+            /* Data Serializa Code Ends here */
+            $problems->status_id = PROBLEM_STATUS_UNKNOWN;
+            $table_json_data = array();
+            create_json_data_from_object_data($structure_array['columns'], $table_json_data, $problems);
+            if(!(isset($form_state['storage']['template_request']) && $form_state['storage']['template_request'])) {
+                $goal_exist = FALSE;
+                $filtered_result = filtered_careplan_result($careplan_result, $obs_id, $goal_exist);
+                if($goal_exist) {
+                    $careplan_td = '<tr style="border-top: none;" class="' . $generic_group_class . '"><td colspan="5">
+                                        <div style="margin: 10px 20px; background-color: white; z-index: 1; border: 1px solid; border-color: #e5e6e9 #dfe0e4 #d0d1d5;">
+                                            <div id="patient_problem_care_plan_wrapper">' .
+                                                            ehr_patient_care_plans_table($filtered_result, $encounter_id, $form_state['storage']['edit_flag'], $assessment_flag, $old_careplan_data) . '
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>';
+                    $json_data['care_plan_info'] = json_encode($filtered_result[0]);
+                }
+                $serilize_json = json_encode(http_build_query($json_data));
+                $table_data .= $generic_description_elem .
+                '<tr id ="problem_row_' . $obs_id . '" is_assessment="' . $assessment_flag . '" obs_id="' . $obs_id . '" class="' . $generic_group_class . '">
+                    <td class="w1p">'.(!$show_history ? $delete_button : '<span form-category="'.$form_category.'" class="custom_a fa fa-copy copyEncData not_disable" table_id_categoory="'. EHR_TAG_patient_a_p_table .'" data="'. htmlentities(json_encode($table_json_data, JSON_FORCE_OBJECT | JSON_UNESCAPED_SLASHES)) .'" value="'.$obs_id.'"></span>').'</td>
+                    <td class="w39p">
+                        <span class="' . $row_deleted_class . '">' . $problem_name . '&nbsp;(' . $code . ')&nbsp'. $add_goal .'</span>
+                    </td>
+                    <td class="w10p"><span class="' . $row_deleted_class . '" ' . $edit_attr_text . '>' . $status . '</span>' . $problem_status_edit . '</td>
+                    <td class="w20p"><div class="restructure"><span class="' . $row_deleted_class . '" ' . $edit_attr_text . '>' . $note_temp . '</span><span>' . $note_edit . '</span></div></td>
+                    <td class="w30p"><div class="restructure"><span class="' . $row_deleted_class . '" ' . $edit_attr_text . '>' . $instruction_temp . '</span><span>' . $instruction_edit . '</span></div></td>
+                 </tr>' . $careplan_td;
+            } else {
+                $table_data .= $generic_description_elem .
+                '<tr id ="problem_row_' . $obs_id . '" obs_id="' . $obs_id . '" is_assessment="' . $assessment_flag . '" class="' . $generic_group_class . '">
+                    <td class="w1p"><span form-category="'.$form_category.'" class="custom_a fa fa-copy copyEncData not_disable" table_id_categoory="'. EHR_TAG_patient_a_p_table .'" data="'. htmlentities(json_encode($table_json_data, JSON_FORCE_OBJECT | JSON_UNESCAPED_SLASHES)) .'" value="'.$obs_id.'"></span></td>
+                    <td>
+                        <span class="' . $row_deleted_class . '">' . $problem_name . '&nbsp;(' . $code . ')</span>
+                    </td>
+                 </tr>';
+            }
+        }
+    }
+    if ($flag == 0 && $edit_flag && isset($form_state['storage']['build_multiselect_option']) && $form_state['storage']['build_multiselect_option']) {
+        drupal_add_js(array(
+            'problem_list_multiple_select_dataset' => $problem_list_multiple_select_data
+        ), 'setting');
+    }
+    $header_hidden = empty($table_data) ? ' invisible_elem' : '';
+    $adjust_buttons = empty($table_data) ? '<div class="adjust_buttons"></div>' : '';
+    $title_elem = '<div class="lfloat" style="width: 175px;">' . $add_icon . EHR_Dx .'</div>' . $adjust_buttons . $buttons;
+    if(!(isset($form_state['storage']['template_request']) && $form_state['storage']['template_request'])) {
+        $table_head = '<thead class="hidden_row_' . $form_state['storage']['encounter_id'] . '">
+                   <tr>
+                   <th class="w40p" colspan="2">' . $title_elem . '</th>
+                   <th class="w10p' . $header_hidden . '">Status</th>
+                   <th class="w20p' . $header_hidden . '">Assessment</th>
+                   <th class="w30p' . $header_hidden . '">Instruction</th>
+                   </tr>
+                   </thead>';
+    } else {
+        $table_head = '<thead>
+                           <tr>
+                           <th colspan="2">' . EHR_Dx . '</th>
+                           </tr>
+                   </thead>';
+    }
+    $table_head = empty($encounter_id) && empty($table_data) ? '' : $table_head;
+    if ($old_data) {
+        $table .= '<table id="patient_problem_list_table_old" container_div_class = "restructure" class="restructure_cell old_encounter_data hidden_row_' . $form_state['storage']['encounter_id'] . $history_shown . '" table_category="problem_list_section" table_id="'.PROBLEM_SECTION_TABLE_ID.'" style="width:100%;" >' . $table_head . '<tbody id="patient_problem_info" class="ehr_tbody">' . ($show_history ? $table_data : '') . '</tbody>
+                   </table>';
+    }
+    if (!$show_history) {
+        $table .= '<table id="patient_problem_list_table" class="restructure_cell" table_category="problem_list_section" container_div_class = "restructure" table_id="'.PROBLEM_SECTION_TABLE_ID.'" style="width:100%;" >' . $table_head . '<tbody id="patient_problem_info" class="ehr_tbody">' . $table_data . '</tbody>
+                   </table>';
+    }
+    $response_data = array();
+    $response_data[0] = $table;
+    $response_data[1] = $problem_list_multiple_select_data;
+    return $response_data;
+}
+/**
+ * This function create chart objects for problem list table.
+ */
+function patient_problem_list_chart_data($result_set, &$form_state) {
+    $object = NULL;
+    $patient_problem_list_chart_data = array();
+    if (count($result_set) > 0) {
+        for ($i = 0; $i < count($result_set); $i++) {
+            $rs = $result_set[$i];
+            $prob_code = $rs->prob_code;
+            $start_dates = explode(',', $rs->start_date_timeline);
+            foreach ($start_dates as $key => $value) {
+                $start_date = new DateTime($value, new DateTimeZone(cf_db_timezone_get()));
+                $start_date->setTimezone(new DateTimeZone(date_default_timezone()));
+                $start_dates[$key] = $start_date->format('Y-m-d H:i:s');
+            }
+            $end_date_timestamp_max = isset($start_dates[0]) ? $start_dates[0] : null;
+            $start_date_min = isset($start_dates[0]) ? $start_dates[0] : null;
+            $end_dates = explode(',', $rs->end_date_timeline);
+            foreach ($end_dates as $key => $value) {
+                $end_date = new DateTime($value, new DateTimeZone(cf_db_timezone_get()));
+                $end_date->setTimezone(new DateTimeZone(date_default_timezone()));
+                $end_dates[$key] = $end_date->format('Y-m-d H:i:s');
+            }
+            $date_count = min(count($start_dates), count($end_dates));
+            for ($k = 0; $k < $date_count; $k++) {
+                $end_date_timestamp = strtotime($end_dates[$k]);
+                $start_date_min = min($start_date_min, $start_dates[$k]);
+                $end_date_timestamp_max = max($end_date_timestamp_max, $end_date_timestamp);
+                if (!isset($object)) {
+                    $object = new patient_problem_chart_data_object();
+                    $object->type = "bar";
+                    $object->prob_code = $prob_code;
+                    $object->start_date = $start_dates[$k];
+                    $max_date_timestamp = $end_date_timestamp;
+                }
+                if (isset($start_dates[$k + 1]) && isset($end_dates[$k + 1])) {
+                    $next_start_date_timestamp = strtotime($start_dates[$k + 1]);
+                    $next_end_date_timestamp = strtotime($end_dates[$k + 1]);
+                    if ($max_date_timestamp < $next_start_date_timestamp) {
+                        $object->supply_days = ($max_date_timestamp - strtotime($object->start_date)) / (3600 * 24);
+                        $patient_problem_list_chart_data[] = $object;
+                        unset($object);
+                    } else {
+                        $max_date_timestamp = max($max_date_timestamp, $next_end_date_timestamp);
+                    }
+                } else {
+                    $object->supply_days = ($max_date_timestamp - strtotime($object->start_date)) / (3600 * 24);
+                    $patient_problem_list_chart_data[] = $object;
+                    unset($object);
+                    $object_gap = new patient_problem_chart_data_object();
+                    $object_gap->type = "gap";
+                    $object_gap->prob_code = $prob_code;
+                    $object_gap->start_date = $start_date_min;
+                    $object_gap->supply_days = ($end_date_timestamp_max - strtotime($start_date_min)) / (3600 * 24);
+                    $patient_problem_list_chart_data[] = $object_gap;
+                    unset($object_gap);
+                }
+            }
+        }
+    }
+    $patient_problem_list_chart_data = array_reverse($patient_problem_list_chart_data);
+    $form_state['storage']['patient_problem_list_chart_data'] = $patient_problem_list_chart_data;
+    drupal_add_js(array(
+        'problem_list_dataset' => $patient_problem_list_chart_data
+    ), 'setting');
+}
+
+/**
+ * Add New Problem Form
+ */
+function patient_problem_list_add_new_form($form, &$form_state) {
+    $form['error_container'] = array(
+        '#prefix' => '<div class="error_container mtm hidden_elem">',
+        '#markup' => '<div class="error_message"><span class="fa fa-exclamation-triangle mrb"></span></div>',
+        '#suffix' => '</div>'
+    );
+    $form['problem_list_add_new_form'] = array(
+        '#prefix' => '<div id = "problem_list_add_new_form">',
+        '#suffix' => '</div>'
+    );
+    add_new_indication_form($form['problem_list_add_new_form'], $form_state);
+    $form['problem_list_add_new_form']['fourth_row'] = array(
+        '#prefix' => '<div class="allergy-form-row" style="padding-bottom:15px;">',
+        '#suffix' => '<div class="clear"></div></div>'
+    );
+    $form['problem_list_add_new_form']['fourth_row']['notes'] = array(
+        '#prefix' => '<div id="notes" class="col-md-6">',
+        '#suffix' => '</div>',
+        '#type' => 'textarea',
+        '#rows' => 1,
+        '#cols' => 100,
+        '#attributes' => array(
+            'maxlength' => 100
+        ),
+        '#title' => 'Assessment'
+    );
+    $form['problem_list_add_new_form']['fourth_row']['instruction'] = array(
+        '#prefix' => '<div id="notes" class="col-md-6">',
+        '#suffix' => '</div>',
+        '#type' => 'textarea',
+        '#rows' => 1,
+        '#cols' => 100,
+        '#attributes' => array(
+            'maxlength' => 100
+        ),
+        '#title' => 'Instruction'
+    );
+    $form['problem_list_add_new_form']['fourth_row']['problem_list_save'] = array(
+        '#prefix' => '<div class="col-md-2 col-md-offset-10" style="padding-top: 22px;">',
+        '#suffix' => '</div><div class="clear"></div>',
+        '#type' => 'button',
+        '#value' => '<span class="fa fa-floppy-o"></span>&nbsp;Save',
+        '#attributes' => array(
+            'integratedsubmit' => 'true',
+            'form_category' => 'problem_list_section',
+            'hideonSuccess' => '#myAjaxModal',
+            'class' => array(
+                'enc_submit_btn'
+            )
+        )
+    );
+    return $form;
+}
+/**
+ * Add New Problem Form Submit
+ */
+function patient_problem_list_add_new_save($encounter_id, $patient_id) {
+    $result = array();
+    if (empty($_POST['ehr_problem_name-value'])) {
+        $result['problem_list_section']['validation']['selector'] = 'input[name="ehr_problem_name"]';
+        $result['problem_list_section']['validation']['error_message'] = 'Please select a Problem.';
+    } elseif (empty($_POST['order_section']) && !empty($_POST['onset']) && $_POST['onset_datetime_state'] != NO_DATE_STATE && !validateDate($patient_id, $_POST['onset'])) {
+        $result['problem_list_section']['validation']['selector'] = 'input[name="onset"]';
+        $result['problem_list_section']['validation']['error_message'] = 'Please select a valid Start Date.';
+    } elseif (empty($_POST['order_section']) && ($_POST['problem_list_status'] == PROBLEM_STATUS_INACTIVE || $_POST['problem_list_status'] == PROBLEM_STATUS_RESOLVED) && !empty($_POST['end_date']) && $_POST['end_datetime_state'] != NO_DATE_STATE && !validateDate($patient_id, $_POST['onset'], $_POST['end_date'])) {
+            $result['problem_list_section']['validation']['selector'] = 'input[name="end_date"]';
+            $result['problem_list_section']['validation']['error_message'] = 'Please select a valid End Date.';
+    } else {
+        $problem_code = !empty($_POST['ehr_problem_name-value']) ? $_POST['ehr_problem_name-value'] : 'null';
+        $problem_code_type = !empty($_POST['problem_name_code_type']) ? $_POST['problem_name_code_type'] : 'null';
+        $icd10_code = !empty($_POST['icd10_code']) ? $_POST['icd10_code'] : db_query('select problem_code_conversion_to_icd10(:problem_code, :problem_code_type)', array(':problem_code' => $problem_code, ':problem_code_type' => $problem_code_type))->fetchField();
+        if ($icd10_code != NULL) {
+            $obs_id = 'null';
+            $start_date = NULL;
+            $note = isset($_POST['notes']) ? $_POST['notes'] : NULL;
+            if (!empty($_POST['onset'])) {
+                $start_date = !empty($_POST['onset']) ? $_POST['onset'] : 'null';
+                $start_date = date('m/d/Y H:i:s', strtotime($start_date));
+                $start_date = new DateTime($start_date, new DateTimeZone(date_default_timezone()));
+                $start_date->setTimezone(new DateTimeZone(cf_db_timezone_get()));
+                $start_date = $start_date->format('Y-m-d H:i:s');
+            }
+            $start_datetime_state = isset($_POST['onset_datetime_state']) && $_POST['onset_datetime_state'] != '' ? $_POST['onset_datetime_state'] : NULL;
+            if (!empty($_POST['end_date'])) {
+                $end_date = $_POST['end_date'];
+                $end_date = date('m/d/Y H:i:s', strtotime($end_date));
+                $end_date = new DateTime($end_date, new DateTimeZone(date_default_timezone()));
+                $end_date->setTimezone(new DateTimeZone(cf_db_timezone_get()));
+                $end_date = $end_date->format('Y-m-d H:i:s');
+            } else {
+                $end_date = 'null';
+            }
+            $end_datetime_state = isset($_POST['end_datetime_state']) && $_POST['end_datetime_state'] != '' ? $_POST['end_datetime_state'] : NULL;
+            $status = !empty($_POST['problem_list_status']) ? $_POST['problem_list_status'] : 'null';
+            $edit_type = 'null';
+            $problem_code = !empty($_POST['ehr_problem_name-value']) ? $_POST['ehr_problem_name-value'] : 'null';
+            $problem_code_type = !empty($_POST['problem_name_code_type']) ? $_POST['problem_name_code_type'] : 'null';
+            $service_date = new DateTime(date('Y-m-d H:i:s'), new DateTimeZone(date_default_timezone()));
+            $service_date->setTimezone(new DateTimeZone(cf_db_timezone_get()));
+            $service_date = $service_date->format('Y-m-d H:i:s');
+            $is_assesment = !empty($note) ? 1 : 0;
+            $icd10_code = ($icd10_code != -1) ? $icd10_code : 'null';
+            $order_section = !(empty($_POST['order_section'])) ? true : false;
+            $instruction = !empty($_POST['instruction']) ? $_POST['instruction'] : NULL;
+            $param = array(
+                'encounter_id' => $encounter_id,
+                'obs_id' => $obs_id,
+                'patientID' => $patient_id,
+                'providerID' => $_SESSION['doctorsPersonId'],
+                'serviceDATE' => $service_date,
+                'startDate' => $start_date,
+                'startDateTimeState' => $start_datetime_state,
+                'endDate' => $end_date,
+                'endDateTimeState' => $end_datetime_state,
+                'statusID' => $status,
+                'problemCODE' => $problem_code,
+                'icd10Code' => $icd10_code,
+                'typeOfAction' => $edit_type,
+                'submittedBY' => $_SESSION['personId'],
+                'code_type_flag' => $problem_code_type,
+                'is_assesment' => $is_assesment,
+                'note' => $note,
+                'assesment_table_change' => $is_assesment ? TRUE : FALSE,
+                'instruction' => $instruction
+            );
+            $result = execute_add_or_edit_ehr_problem_list($param);
+            if (count($result['problem_list_section']['new_problem'])){
+                $result['problem_list_section']['new_problem']['order_section'] = $order_section;
+            }
+        } else {
+            $result['problem_list_section']['validation']['warning'] = 'true';
+            $result['problem_list_section']['validation']['error_message'] = 'The Dx code you have selected can not be used for assessment in future, because no appropriate ICD10CM code matching with your selected Dx code can be found. You can still continue with your selected Dx code or you can change the Dx code/code system.  ';
+        }
+    }
+    return $result;
+}
+/**
+ * Patient problem edit
+ */
+function patient_problem_list_edit_save($encounter_id, $patient_id) {
+    $result = array();
+    if (!empty($_POST['problem_start_date']) && !validateDate($patient_id, $_POST['problem_start_date'])) {
+        $result['problem_list_section']['validation']['error_message'] = 'Please select a valid Start Date.';
+        return $result;
+    } elseif (($_POST['problem_list_status'] == PROBLEM_STATUS_INACTIVE || $_POST['problem_list_status'] == PROBLEM_STATUS_RESOLVED) && !empty($_POST['problem_end_date']) && !validateDate($patient_id, $_POST['problem_start_date'], $_POST['problem_end_date'])) {
+        $result['problem_list_section']['validation']['error_message'] = 'Please select a valid End Date.';
+        return $result;
+    }
+    $obs_id = $_POST['obs_id'];
+    $status = !empty($_POST['problem_status']) ? $_POST['problem_status'] : NULL;
+    $start_date = $end_date = NO_DATE_TIME;
+    $note = isset($_POST['problem_note']) ? $_POST['problem_note'] : NULL;
+    $instruction = !empty($_POST['instruction']) ? $_POST['instruction'] : NULL;
+    if (!empty($_POST['problem_start_date'])) {
+        $start_date = $_POST['problem_start_date'];
+        $start_date = date('m/d/Y H:i:s', strtotime($start_date));
+        $start_date = new DateTime($start_date, new DateTimeZone(date_default_timezone()));
+        $start_date->setTimezone(new DateTimeZone(cf_db_timezone_get()));
+        $start_date = $start_date->format('Y-m-d H:i:s');
+    }
+    $start_datetime_state = isset($_POST['problem_start_datetime_state']) && $_POST['problem_start_datetime_state'] != '' ? $_POST['problem_start_datetime_state'] : NO_DATE_STATE;
+    if (!empty($_POST['problem_end_date'])) {
+        $end_date = $_POST['problem_end_date'];
+        $end_date = date('m/d/Y H:i:s', strtotime($end_date));
+        $end_date = new DateTime($end_date, new DateTimeZone(date_default_timezone()));
+        $end_date->setTimezone(new DateTimeZone(cf_db_timezone_get()));
+        $end_date = $end_date->format('Y-m-d H:i:s');
+    }
+    $end_datetime_state = isset($_POST['problem_end_datetime_state']) && $_POST['problem_end_datetime_state'] != '' ? $_POST['problem_end_datetime_state'] : NO_DATE_STATE;
+    $assesment_table_change = false;
+    if (!empty($status) && ($status == PROBLEM_STATUS_RESOLVED || $status == PROBLEM_STATUS_INACTIVE)) {
+        $assesment_table_change = TRUE;
+    }
+    $param = array(
+        'encounter_id' => $encounter_id,
+        'obs_id' => $obs_id,
+        'patientID' => $patient_id,
+        'providerID' => $_SESSION['doctorsPersonId'],
+        'serviceDATE' => NULL,
+        'startDate' => $start_date,
+        'startDateTimeState' => $start_datetime_state,
+        'endDate' => $end_date,
+        'endDateTimeState' => $end_datetime_state,
+        'statusID' => $status,
+        'problemCODE' => NULL,
+        'icd10Code' => NULL,
+        'typeOfAction' => ENCOUNTER_SECTION_EDIT,
+        'submittedBY' => $_SESSION['personId'],
+        'code_type_flag' => NULL,
+        'is_assesment' => NULL,
+        'note' => $note,
+        'assesment_table_change' => $assesment_table_change,
+        'instruction' => $instruction
+    );
+    $result = execute_add_or_edit_ehr_problem_list($param);
+    return $result;
+}
+/**
+ * This procedure call for problem add, edit and delete
+ */
+function execute_add_or_edit_ehr_problem_list($param) {
+    $result = array();
+    $query = 'call add_or_edit_ehr_problem_list(:encounter_id,:obs_id,:patientID,:providerID,:serviceDATE,:startDate,:startDateTimeState,:endDate,:endDateTimeState,:statusID,:problemCODE, :icd10Code, :typeOfAction,:submittedBY, :code_type_flag, :is_assesment, :note, :instruction)';
+    $params = array(
+        ':encounter_id' => $param['encounter_id'],
+        ':obs_id' => $param['obs_id'],
+        ':patientID' => $param['patientID'],
+        ':providerID' => $param['providerID'],
+        ':serviceDATE' => $param['serviceDATE'],
+        ':startDate' => $param['startDate'],
+        ':startDateTimeState' => $param['startDateTimeState'],
+        ':endDate' => $param['endDate'],
+        ':endDateTimeState' => $param['endDateTimeState'],
+        ':statusID' => $param['statusID'],
+        ':problemCODE' => $param['problemCODE'],
+        ':icd10Code' => $param['icd10Code'],
+        ':typeOfAction' => $param['typeOfAction'],
+        ':submittedBY' => $param['submittedBY'],
+        ':code_type_flag' => $param['code_type_flag'],
+        ':is_assesment' => $param['is_assesment'],
+        ':note' => $param['note'],
+        ':instruction' => $param['instruction']
+    );
+    $result_set = sp_query_with_parameters($query, $params);
+    $new_problem = isset($result_set[0][0]) ? $result_set[0][0] : '';
+    $form_state = array();
+    $form_state['storage']['edit_flag'] = TRUE;
+    $form_state['storage']['status_flag'] = isset($_POST['status_flag']) ? $_POST['status_flag'] : 0;
+    $form_state['storage']['encounter_id'] = $param['encounter_id'];
+    if (!empty($new_problem)) {
+        $result['problem_list_section']['new_problem']['last_inserted_obs_id'] = $new_problem->var_last_inserted_id;
+        $result['problem_list_section']['new_problem']['description'] = $new_problem->description;
+        $result['problem_list_section']['new_problem']['is_assessment'] = $new_problem->assessment_flag;
+        $result['problem_list_section']['new_problem']['key'] = $new_problem->key;
+        if (!empty($_POST['care_plan_info'])) {
+            $care_plan_info = json_decode($_POST['care_plan_info']);
+            foreach ($care_plan_info as $index => $care_plan_data) {
+                $_POST['goals-value'] = !empty($care_plan_data->CODE) ? $care_plan_data->CODE : '';
+                $_POST['instructions'] = !empty($care_plan_data->instruction) ? $care_plan_data->instruction : '';
+                $_POST['education_material'] = !empty($care_plan_data->document_given) ? $care_plan_data->document_given : '';
+                $_POST['indication-value'] = $result['problem_list_section']['new_problem']['last_inserted_obs_id'];
+                $date_time = new DateTime('NOW', new DateTimeZone(date_default_timezone()));
+                $date_time->setTimezone(new DateTimeZone(cf_db_timezone_get()));
+                $_POST['care_instruction_date'] = $date_time->format('Y-m-d H:i:s');
+                $_POST['datetime_state'] = DEFAULT_DATETIME_STATE;
+                $_POST['action_type'] = $_POST['copy_care_plan'] = 1;
+                care_plans_add_new_save($param['encounter_id'], $param['patientID']);
+            }
+        }
+    }
+    $response_data = patient_problem_list_table($param['patientID'], $form_state);
+    $result['problem_list_section']['table']['#patient_problem_list_table'] = $response_data[0];
+    $result['problem_list_section']['multi_select_option']['problem_list_multiple_select_dataset'] = $response_data[1];
+    $result['problem_list_section']['chart']['problem_list_dataset|patient_problem_list_table_inline_chart'] = $form_state['storage']['patient_problem_list_chart_data'];
+    if ($param['assesment_table_change']) {
+        $html = patient_assessment_plan_table($param['patientID'], $param['encounter_id'], $form_state);
+        $result['problem_list_section']['table']['#assesment_list'] = $html;
+    }
+    return $result;
+}
+/**
+ * Patient problem Delete
+ */
+function patient_problem_list_delete($encounter_id, $patient_id, $obs_id) {
+    $param = array(
+        'encounter_id' => $encounter_id,
+        'obs_id' => $obs_id,
+        'patientID' => $patient_id,
+        'providerID' => $_SESSION['doctorsPersonId'],
+        'serviceDATE' => NULL,
+        'startDate' => NULL,
+        'startDateTimeState' => NULL,
+        'endDate' => NULL,
+        'endDateTimeState' => NULL,
+        'statusID' => NULL,
+        'problemCODE' => NULL,
+        'icd10Code' => NULL,
+        'typeOfAction' => ENCOUNTER_SECTION_DELETE,
+        'in_status' => NULL,
+        'in_reason' => NULL,
+        'submittedBY' => $_SESSION['personId'],
+        'code_type_flag' => NULL,
+        'is_assesment' => 0,
+        'note' => NULL,
+        'assesment_table_change' => 0,
+        'instruction' => NULL
+    );
+    $result = execute_add_or_edit_ehr_problem_list($param);
+    return $result;
+}
+function patient_problem_list_type_options() {
+    $status_dropdown = array();
+    $problemList = db_query('select * from cf_static_problem_type');
+    foreach ($problemList as $problem) {
+        $status_dropdown[$problem->type_id] = $problem->problem_type;
+    }
+    return $status_dropdown;
+}
+function patient_problem_list_status_options() {
+    $status_dropdown = array();
+    $status_dropdown[PROBLEM_STATUS_STABLE] = 'Stable';
+    $status_dropdown[PROBLEM_STATUS_UNSTABLE] = 'Unstable';
+    $status_dropdown[PROBLEM_STATUS_UNKNOWN] = 'Unknown';
+    $status_dropdown[PROBLEM_STATUS_INACTIVE] = 'Inactive';
+    $status_dropdown[PROBLEM_STATUS_RESOLVED] = 'Resolved';
+    return $status_dropdown;
+}
+function problem_inline_status_options($selected_value = 'Unknown') {
+    $status_select = '';
+    $status_dropdown = array();
+    $status_dropdown = patient_problem_list_status_options();
+    foreach ($status_dropdown as $key => $value) {
+        if ($value == $selected_value) {
+            $status_select .= '<option value="' . $key . '" selected>' . $value . '</option>';
+        } else {
+            $status_select .= '<option value="' . $key . '">' . $value . '</option>';
+        }
+    }
+    return $status_select;
+}
+function filtered_careplan_result($careplan_result, $problem_obs_id, &$goal_exist) {
+    $indication_list = !empty($careplan_result[1]) ? $careplan_result[1] : array();
+    foreach ($indication_list as $index => $indication) {
+        if($indication->indication_codes != $problem_obs_id) {
+            unset($indication_list[$index]);
+        } else {
+            $goal_exist = TRUE;
+            $goal_obs_id[] = $indication->obs_id;
+        }
+    }
+    if($goal_exist) {
+        $goal_list = !empty($careplan_result[0]) ? $careplan_result[0] : array();
+        foreach ($goal_list as $index => $goal) {
+            if(!in_array($goal->id,$goal_obs_id)) {
+                unset($goal_list[$index]);
+            }
+        }
+        $careplan_result[0] = $goal_list;
+        $careplan_result[1] = $indication_list;
+    }
+    return $careplan_result;
+}
